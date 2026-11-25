@@ -28,11 +28,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
       - name: Handle intake and requested preliminary review
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9.0.0
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}

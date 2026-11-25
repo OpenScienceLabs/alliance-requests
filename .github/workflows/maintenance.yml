@@ -38,17 +38,17 @@ jobs:
        vars.ENABLE_PROJECT_HEALTH_CHECKS == 'true')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7.1.0
         with:
           python-version: '3.12'
       - name: Check the configured public project registry
         env:
           GH_TOKEN: ${{ github.token }}
         run: python scripts/check-affiliated-projects.py --require-projects --repo "$GITHUB_REPOSITORY" --output health-check-report.md
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: affiliation-health-check-report
@@ -63,7 +63,7 @@ jobs:
       issues: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/stale@v9
+      - uses: actions/stale@v11.0.0
         with:
           only-issue-labels: 'type: affiliation-request,status: needs-info'
           days-before-issue-stale: 30

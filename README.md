@@ -125,7 +125,7 @@ maintenance note.
 ## Useful links
 
 - [Open Science Labs website](https://opensciencelabs.org/)
-- [OSL project affiliation policy](https://opensciencelabs.org/projects/affiliation/)
+- [OSL Alliance membership policy](https://opensciencelabs.org/projects/alliance/)
 - [OSL project list](https://opensciencelabs.org/projects/list/)
-- [OSL Discord](https://opensciencelabs.org/discord)
+- [OSL Discord](https://opensciencelabs.org/discord/)
 - [OSL Code of Conduct](https://opensciencelabs.org/about/coc/)
