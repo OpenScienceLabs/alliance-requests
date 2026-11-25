@@ -65,7 +65,8 @@ A typical review follows this path:
 
 1. A maintainer opens an affiliation request issue.
 2. Automation applies `type: affiliation-request` and `status: needs-triage`.
-3. A reviewer checks completeness and requests missing information if needed.
+3. The bot posts a preliminary evidence report; a reviewer checks completeness
+   and requests missing information if needed.
 4. A reviewer evaluates eligibility, alignment, and maintainer readiness.
 5. OSL may allow public/community comment where useful.
 6. A reviewer records a decision: approved, declined, or needs changes.
@@ -74,6 +75,12 @@ A typical review follows this path:
 
 See [docs/workflow.md](docs/workflow.md) and
 [docs/reviewer-guide.md](docs/reviewer-guide.md) for details.
+
+To request a fresh preliminary review of an existing application, add
+`status: needs-triage` (remove and re-add it if already present). The bot follows
+[the project-review skill](.agents/skills/project-review/SKILL.md) and leaves
+membership decisions to humans. See [bot setup](docs/bot-workflows.md#preliminary-project-review-bot)
+to enable AI synthesis with the `OPENAI_API_KEY` Actions secret.
 
 ## GSoC and limited programs
 

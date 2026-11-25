@@ -1,0 +1,8 @@
+name: osl-alliance
+channels:
+  - nodefaults
+  - conda-forge
+dependencies:
+  - python
+  - pip
+  - nodejs

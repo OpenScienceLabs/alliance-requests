@@ -3,6 +3,17 @@
 Reviewers represent OSL's values during affiliation reviews. Be transparent,
 kind, specific, and evidence-based.
 
+Use [the OSL Alliance project-review skill](../.agents/skills/project-review/SKILL.md)
+for evidence handling, proportional baseline checks, the R1–R12 rubric, and human
+follow-up. Apply [adopted affiliation criteria](criteria.md) when they are stricter
+than the skill's proposed baselines.
+
+New applications receive a preliminary bot report. To request a fresh report on
+an existing application, add `status: needs-triage`; remove and re-add it if it is
+already present. The report updates in place and cannot substitute for the
+skill's deeper investigation or a human decision. See
+[bot setup and sampling limits](bot-workflows.md#preliminary-project-review-bot).
+
 ## Review principles
 
 - Ask for links and evidence, not only claims.

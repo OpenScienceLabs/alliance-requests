@@ -8,10 +8,12 @@ consistent.
 1. Maintainer opens an affiliation request issue.
 2. Bot labels the issue with `type: affiliation-request` and
    `status: needs-triage`.
-3. Bot checks required fields when possible.
+3. The review bot checks form completeness and posts a preliminary evidence
+   report using [the project-review skill](../.agents/skills/project-review/SKILL.md).
 4. Reviewer performs a completeness check.
 5. Reviewer requests missing information with `status: needs-info` if needed.
 6. Maintainer updates the issue.
+   A reviewer removes and re-adds `status: needs-triage` to refresh the bot report.
 7. Reviewer performs eligibility review.
 8. OSL may allow a public/community comment period when useful.
 9. Reviewer records a decision:
@@ -29,7 +31,7 @@ consistent.
 
 Use status labels consistently:
 
-- `status: needs-triage` — needs first review.
+- `status: needs-triage` — needs review; adding it requests a preliminary bot review.
 - `status: needs-info` — waiting for applicant or maintainer information.
 - `status: in-review` — under OSL review.
 - `status: approved` — approved for affiliation.

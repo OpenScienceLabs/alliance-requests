@@ -34,11 +34,11 @@ jobs:
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 issue_number: issue.number,
-                body: `Thanks for opening an OSL affiliation request.
-
-An OSL reviewer will check the required evidence: OSI-approved license, Code of Conduct, maintainer contact, public repository, maintenance status, and alignment with OSL.
-
-Reminder: affiliation does not guarantee GSoC participation, contributor slots, funding, interns, mentors, or promotion. If approved, please add the OSL affiliation acknowledgement to your README/docs.`
+                body: [
+                  'Thanks for opening an OSL affiliation request.',
+                  'An OSL reviewer will check the required evidence: OSI-approved license, Code of Conduct, maintainer contact, public repository, maintenance status, and alignment with OSL.',
+                  'Reminder: affiliation does not guarantee GSoC participation, contributor slots, funding, interns, mentors, or promotion. If approved, please add the OSL affiliation acknowledgement to your README/docs.'
+                ].join('\n\n')
               });
             }
 

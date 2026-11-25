@@ -35,12 +35,20 @@ Before opening a pull request, run the relevant checks locally:
 ```bash
 bash -n scripts/create-labels.sh
 python -m py_compile scripts/check-affiliated-projects.py
+node --test scripts/review-affiliation.test.cjs
 git diff --check
 ```
 
 If you add Python dependencies, document them and update the workflows. Prefer
 standard-library Python for repository automation unless a dependency is clearly
 worth the maintenance cost.
+
+The preliminary-review bot uses Node.js 20 or later and built-in modules only;
+no npm install is required. Its tests mock GitHub and OpenAI, make no network
+calls, and run through the **Automation checks** workflow. Review-trigger changes
+should preserve the manual triage-label path, public-only evidence collection,
+single bot-owned report, safe AI fallback, and human decision boundary. Workflow
+YAML must parse before merging.
 
 ## Pull request expectations
 

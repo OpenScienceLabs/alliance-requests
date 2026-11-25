@@ -14,7 +14,8 @@ Use labels to make review state clear and searchable. The script
 
 ## Status labels
 
-- `status: needs-triage` — needs initial review.
+- `status: needs-triage` — needs review; adding it to an open affiliation request
+  triggers a fresh preliminary bot report. Remove and re-add it to rerun.
 - `status: needs-info` — waiting for applicant or maintainer information.
 - `status: in-review` — under OSL review.
 - `status: approved` — approved by OSL.
