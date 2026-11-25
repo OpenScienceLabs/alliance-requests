@@ -2,6 +2,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const { setTimeout: delay } = require('node:timers/promises');
 
 const MARKER = '<!-- osl-affiliation-preliminary-review -->';
 const ACK_MARKER = '<!-- osl-affiliation-intake -->';
@@ -77,6 +78,30 @@ function shouldReview(payload) {
   return isApplication(payload.issue ?? {}) &&
     (['opened', 'reopened', 'transferred'].includes(payload.action) ||
      (payload.action === 'labeled' && payload.label?.name === 'status: needs-triage'));
+}
+
+// Adding the same labels again is safe. Retry this operation alone so a lost
+// response cannot cause acknowledgement or report comments to be duplicated.
+async function applyIntakeLabels({ github, issueArgs, labels, core, wait = delay }) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await github.rest.issues.addLabels({ ...issueArgs, labels, request: { timeout: 20000 } });
+      return null;
+    } catch (error) {
+      const status = Number(error.status);
+      if (!(status >= 500 && status < 600)) {
+        throw new Error(`Could not apply intake labels (HTTP ${status || 'unknown'}). Check repository permissions and label configuration.`);
+      }
+      if (attempt < 3) {
+        core.info(`GitHub returned HTTP ${status} applying intake labels; retrying (${attempt + 1}/3).`);
+        await wait(1000 * 2 ** (attempt - 1));
+        continue;
+      }
+      const warning = `Could not confirm routine intake label updates after 3 attempts (HTTP ${status}). Review publication continues; maintainers can verify the labels.`;
+      core.warning(warning);
+      return warning;
+    }
+  }
 }
 
 async function observe(title, url, read, summarize) {
@@ -295,7 +320,7 @@ function renderReport(bundle, synthesis, { guidelineUrl, synthesisStatus }) {
   return lines.join('\n');
 }
 
-async function run({ github, context, core, fetchImpl = fetch }) {
+async function run({ github, context, core, fetchImpl = fetch, wait = delay }) {
   const manual = context.eventName === 'workflow_dispatch';
   if (!manual && !shouldReview(context.payload) &&
       !(context.payload.action === 'edited' && isApplication(context.payload.issue ?? {}))) {
@@ -317,7 +342,8 @@ async function run({ github, context, core, fetchImpl = fetch }) {
   const labels = [];
   if (!labelNames.includes('type: affiliation-request')) labels.push('type: affiliation-request');
   if (!labelNames.some(name => name.startsWith('status: '))) labels.push('status: needs-triage');
-  if (labels.length) await github.rest.issues.addLabels({ ...issueArgs, labels });
+  const intakeWarning = labels.length
+    ? await applyIntakeLabels({ github, issueArgs, labels, core, wait }) : null;
   if (context.payload.action === 'opened' && !comments.some(comment =>
     comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(ACK_MARKER))) {
     await github.rest.issues.createComment({ ...issueArgs, body: [
@@ -344,6 +370,9 @@ async function run({ github, context, core, fetchImpl = fetch }) {
       core.warning('AI synthesis failed or failed validation. Publishing collected evidence for human review. Check API configuration and service availability.');
     }
   }
+  // Label synchronization is an operational warning, not evidence about the
+  // applicant's software. Publish it without sending it to AI synthesis.
+  if (intakeWarning) bundle.limitations.push(intakeWarning);
   const reportOptions = {
     guidelineUrl: `https://github.com/${context.repo.owner}/${context.repo.repo}/blob/${context.sha}/${SKILL_PATH}`,
     synthesisStatus,
@@ -367,4 +396,4 @@ async function run({ github, context, core, fetchImpl = fetch }) {
   core.info('Published the preliminary review; affiliation status and membership decisions remain with human reviewers.');
 }
 
-module.exports = { ACK_MARKER, MARKER, SYNTHESIS_SCHEMA, collectEvidence, plain, redact, renderReport, repositorySlug, run, sections, shouldReview, synthesize, validateSynthesis };
+module.exports = { ACK_MARKER, MARKER, SYNTHESIS_SCHEMA, applyIntakeLabels, collectEvidence, plain, redact, renderReport, repositorySlug, run, sections, shouldReview, synthesize, validateSynthesis };

@@ -16,6 +16,12 @@ Responsibilities:
 - apply `type: affiliation-request` and `status: needs-triage` when needed;
 - post an acknowledgement comment on new requests.
 
+Routine label updates retry GitHub server errors up to three attempts, waiting
+one and then two seconds between attempts. If server errors persist, the review
+continues and records a warning in the workflow and report. Permission,
+validation, and rate-limit errors still stop the run for investigation. Comment
+creation is not automatically retried, to avoid duplicate public comments.
+
 ## Preliminary project-review bot
 
 The **Affiliation bot** requests a review when an open application is created,

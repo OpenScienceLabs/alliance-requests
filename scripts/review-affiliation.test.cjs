@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
-  ACK_MARKER, MARKER, collectEvidence, renderReport, repositorySlug, run, sections,
+  ACK_MARKER, MARKER, applyIntakeLabels, collectEvidence, renderReport, repositorySlug, run, sections,
   shouldReview, synthesize, validateSynthesis,
 } = require('./review-affiliation.cjs');
 
@@ -36,7 +36,8 @@ function fixture() {
     issues: {
       get: wrap('issue', () => structuredClone(currentIssue)),
       addLabels: wrap('labels', args => {
-        currentIssue.labels.push(...args.labels.map(name => ({ name })));
+        const existing = new Set(currentIssue.labels.map(label => label.name));
+        currentIssue.labels.push(...args.labels.filter(name => !existing.has(name)).map(name => ({ name })));
       }),
       listForRepo: wrap('issues', () => [{ number: 3, title: 'A PR', pull_request: {} }, { number: 2, title: 'A bug' }]),
       listComments: wrap('comments', () => comments),
@@ -289,4 +290,85 @@ test('manual dispatch rejects invalid issue numbers and skips unrelated or close
     await run({ ...mock, context: { ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '7' } } } });
     assert.equal(mock.calls.some(call => ['create', 'labels', 'repo'].includes(call.name)), false);
   }
+});
+
+test('transient label errors retry with bounded backoff and recover without repeating comments', async t => {
+  const oldKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
+  const mock = fixture();
+  const addLabels = mock.github.rest.issues.addLabels;
+  const waits = [];
+  let attempts = 0;
+  mock.github.rest.issues.addLabels = async args => {
+    // The server can apply labels and then lose its response. A retry must still
+    // produce just one label set, acknowledgement, and report.
+    const result = await addLabels(args);
+    if (++attempts < 3) throw Object.assign(new Error('GitHub server error'), { status: 500 });
+    return result;
+  };
+  await run({ ...mock, context, wait: async milliseconds => { waits.push(milliseconds); } });
+  assert.equal(attempts, 3);
+  assert.deepEqual(waits, [1000, 2000]);
+  assert.equal(mock.currentIssue.labels.length, 2);
+  assert.equal(mock.calls.filter(call => call.name === 'create' && call.args.body.startsWith(ACK_MARKER)).length, 1);
+  assert.equal(mock.calls.filter(call => call.name === 'create' && call.args.body.startsWith(MARKER)).length, 1);
+});
+
+test('persistent label server errors warn and still publish a review for the legacy application', async t => {
+  const oldKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
+  const mock = fixture();
+  mock.currentIssue.title = 'Incubation application: Formulon Physics';
+  mock.currentIssue.labels = [{ name: 'status: in-review' }];
+  let attempts = 0;
+  const warnings = [];
+  mock.core.warning = message => { warnings.push(message); };
+  mock.github.rest.issues.addLabels = async () => {
+    attempts++;
+    throw Object.assign(new Error('private request headers and credential'), { status: 500 });
+  };
+  await run({ ...mock, wait: async () => {}, context: {
+    ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '1' } },
+  } });
+  assert.equal(attempts, 3);
+  assert.equal(warnings.length, 1);
+  const report = mock.comments.find(comment => comment.user.login === 'github-actions[bot]' && comment.body.startsWith(MARKER));
+  assert.ok(report);
+  assert.match(report.body, /intake label updates after 3 attempts/);
+  assert.equal(report.body.includes('private request'), false);
+  assert.equal(warnings[0].includes('credential'), false);
+});
+
+test('permission and validation failures are surfaced immediately without retries or request dumps', async () => {
+  for (const status of [401, 403, 404, 422, 429]) {
+    const mock = fixture();
+    let attempts = 0;
+    const waits = [];
+    mock.github.rest.issues.addLabels = async () => {
+      attempts++;
+      throw Object.assign(new Error('private request headers and credential'), { status });
+    };
+    await assert.rejects(applyIntakeLabels({
+      ...mock, issueArgs: { ...context.repo, issue_number: 1 }, labels: ['type: affiliation-request'],
+      wait: async milliseconds => { waits.push(milliseconds); },
+    }), error => error.message.includes(`HTTP ${status}`) && !error.message.includes('credential'));
+    assert.equal(attempts, 1);
+    assert.deepEqual(waits, []);
+  }
+});
+
+test('comment creation errors stay visible and cannot be duplicated by the label retry mechanism', async () => {
+  const mock = fixture();
+  mock.currentIssue.labels = [{ name: 'type: affiliation-request' }, { name: 'status: in-review' }];
+  let attempts = 0;
+  mock.github.rest.issues.createComment = async () => {
+    attempts++;
+    throw Object.assign(new Error('GitHub comment service unavailable'), { status: 500 });
+  };
+  await assert.rejects(run({ ...mock, context: {
+    ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '1' } },
+  } }), /comment service unavailable/);
+  assert.equal(attempts, 1);
 });
