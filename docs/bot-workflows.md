@@ -81,12 +81,13 @@ GitHub Actions does not load the local `.env` file. If the API secret is missing
 the model request fails, or synthesis remains invalid, the job fails and keeps
 the previous public evaluation intact. The run summary and artifact show the
 failure stage, safe error code, HTTP status/provider code when available, and
-OpenAI request ID. Raw response bodies, invalid model drafts, and credentials
-are never logged. Public evidence remains available in the failure artifact.
+OpenAI request ID. Provider error messages are sanitized and bounded; raw response
+bodies, invalid model drafts, and credentials are never logged. Public evidence
+remains available in the failure artifact.
 
 The model receives exact rubric and evidence-ID enums plus array-count limits.
-One corrective request is allowed if content fails advisory-contract validation;
-one retry is allowed for a transient model-service/network failure. Authentication,
+One additional model request is allowed to correct advisory-contract validation
+or retry a transient model-service/network failure. Authentication,
 quota and request-schema errors stop immediately with their provider codes.
 API failures, refusals, incomplete output, invented evidence IDs, and invalid
 schemas cannot produce a successful review. The workflow
@@ -113,9 +114,10 @@ records the reviewed revision, readiness, rubric count, and verified comment URL
 
 ### Verify before merging
 
-Run **Affiliation bot** on a candidate branch with the issue number. Non-default
-branches automatically use read-only preview mode; selecting the `preview`
-checkbox also enables it on `main`. Previews gather real public evidence, call
+Run **Affiliation bot** on `main` with the issue number and select the `preview`
+checkbox to test without changing the issue. Leave it unchecked to publish the
+evaluation. The mode is explicit and logged; branch metadata never silently
+switches a requested publication into a preview. Previews gather real public evidence, call
 the configured model, validate all rubric areas, and render the complete report
 in the run summary and artifact. They never add labels or create/edit comments.
 
@@ -123,8 +125,9 @@ For CI verification, add `ci: review-preview` to a same-repository pull request.
 The **Repository checks → review-preview** job evaluates the pilot issue with
 read-only GitHub permissions. `REVIEW_PREVIEW_ISSUE` selects its issue number
 (default `1`). Fork PRs cannot run the job. This is opt-in because it uses the
-configured OpenAI account. Verify a complete live preview before merging bot
-changes, then check the verified public comment URL on the first production run.
+configured OpenAI account. For a workflow using `main` directly, the manual
+preview checkbox provides the same read-only check. Verify a complete live
+preview, then uncheck Preview and check the verified public comment URL.
 
 This is preliminary screening, not the skill's expanded repository/lifecycle
 investigation. It does not trace development cycles, inspect commit diffs or PR

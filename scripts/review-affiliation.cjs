@@ -338,11 +338,16 @@ async function requestSynthesis(bundle, { apiKey, model, skill, policy, fetchImp
   try { data = await response.json(); } catch {
     throw new ReviewError('OPENAI_INVALID_RESPONSE', 'OpenAI returned a non-JSON response.', { http_status: response.status, request_id: requestId });
   }
+  if (!data || typeof data !== 'object' || Array.isArray(data)) {
+    throw new ReviewError('OPENAI_INVALID_RESPONSE', 'OpenAI returned an unexpected response shape.', { http_status: response.status, request_id: requestId });
+  }
   if (!response.ok) throw new ReviewError('OPENAI_HTTP_ERROR',
     `OpenAI request failed with HTTP ${response.status}.`, {
       http_status: response.status, request_id: requestId,
       provider_code: safeIdentifier(data.error?.code, apiKey),
       provider_type: safeIdentifier(data.error?.type, apiKey),
+      provider_message: typeof data.error?.message === 'string'
+        ? plain(data.error.message.split(apiKey).join('[redacted]')).slice(0, 800) : undefined,
     });
   if (data.status !== 'completed') throw new ReviewError('OPENAI_INCOMPLETE', 'OpenAI did not complete the review.', {
     request_id: requestId, reason: safeIdentifier(data.incomplete_details?.reason, apiKey),
@@ -467,6 +472,7 @@ async function executeReview({ github, context, core, fetchImpl = fetch, wait = 
   }
   if (!publish) {
     state.status = 'preview';
+    core.info('Evaluation generated in preview mode. To apply it to the issue, run again with Preview unchecked.');
     return;
   }
   // Re-check state before publishing after potentially slow network calls.
@@ -523,6 +529,7 @@ async function recordOutcome(state, { core, outputDirectory }) {
     comment_url: state.comment_url, diagnostic: state.diagnostic,
   };
   const summary = `## Review outcome: ${state.status}\n\n${state.comment_url ? `[Verified issue comment](${state.comment_url})\n\n` : ''}` +
+    (state.status === 'preview' ? '**Preview only: the issue was not changed. Run Affiliation bot with Preview unchecked to publish.**\n\n' : '') +
     (state.diagnostic ? `\`\`\`json\n${JSON.stringify(state.diagnostic, null, 2)}\n\`\`\`\n\n` : '') +
     (state.report ?? 'No evaluation was produced. See the diagnostic above.');
   if (outputDirectory) {

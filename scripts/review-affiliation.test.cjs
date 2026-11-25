@@ -396,7 +396,7 @@ test('comment creation errors stay visible and cannot be duplicated by the label
   assert.equal(attempts, 1);
 });
 
-test('a real review result is rendered, saved, read back, and linked as the successful outcome', async () => {
+test('a complete structured review is rendered, saved, read back, and linked as the successful outcome', async () => {
   const mock = fixture();
   const outcome = await run({ ...mock, context });
   assert.equal(outcome.status, 'published');
@@ -493,12 +493,13 @@ test('HTTP authentication, quota and schema errors expose safe provider codes wi
       fetchImpl: async () => {
         requests++;
         return { ok: false, status, headers: new Headers({ 'x-request-id': 'req-diagnostic' }), json: async () => ({ error: {
-          code, type: 'invalid_request_error', message: 'unit-test-key private credential',
+          code, type: 'invalid_request_error', message: 'Invalid request parameter. Credential: unit-test-key; contact person@example.org',
         } }) };
       },
     }), error => error.code === 'OPENAI_HTTP_ERROR' && error.details.provider_code === code &&
       error.details.http_status === status && error.details.request_id === 'req-diagnostic' &&
-      !JSON.stringify(error).includes('unit-test-key'));
+      error.details.provider_message.includes('Invalid request parameter') &&
+      !JSON.stringify(error).includes('unit-test-key') && !JSON.stringify(error).includes('person@example.org'));
     assert.equal(requests, 1);
   }
 });

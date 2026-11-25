@@ -43,8 +43,11 @@ jobs:
         with:
           script: |
             const { run } = require('./scripts/review-affiliation.cjs');
-            const preview = context.ref !== `refs/heads/${context.payload.repository.default_branch}` ||
-              context.payload.inputs?.preview === 'true';
+            const preview = context.payload.inputs?.preview === 'true' ||
+              context.payload.inputs?.preview === true;
+            core.info(preview
+              ? 'Review mode: preview. The evaluation will be saved in the run summary; the issue will not change.'
+              : 'Review mode: publish. The evaluation must be saved and read back from the issue before this run succeeds.');
             await run({
               github, context, core, publish: !preview,
               outputDirectory: require('node:path').join(process.env.RUNNER_TEMP, 'osl-review')
