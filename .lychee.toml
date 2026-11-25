@@ -1,0 +1,6 @@
+# Explicit examples in issue forms are not real project or issue links.
+exclude = [
+  '^https?://example\.(com|org|net)([/?#].*)?$',
+  '^https://github\.com/(org|example)/project([/?#].*)?$',
+  '^https://github\.com/OpenScienceLabs/(affiliation|alliance)-requests/issues/123([?#].*)?$',
+]

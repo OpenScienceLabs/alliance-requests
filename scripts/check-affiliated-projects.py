@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 DEFAULT_SOURCE = "data/affiliated-projects.json"
-DEFAULT_REPO = "OpenScienceLabs/affiliation-requests"
+DEFAULT_REPO = "OpenScienceLabs/alliance-requests"
 GITHUB_API = "https://api.github.com"
 USER_AGENT = "osl-affiliation-health-check/1.0"
 
@@ -174,6 +174,9 @@ def load_projects(source: Path) -> tuple[list[dict[str, Any]], str]:
         raw_projects = payload
     else:
         return [], f"`{source}` must contain a JSON object or array."
+
+    if not isinstance(raw_projects, list):
+        return [], f"`{source}` must contain a `projects` array."
 
     projects: list[dict[str, Any]] = []
     for index, item in enumerate(raw_projects, start=1):
@@ -540,6 +543,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--output", help="Optional Markdown report path.")
     parser.add_argument(
+        "--require-projects",
+        action="store_true",
+        help="Fail if the project registry is missing, invalid, or empty.",
+    )
+    parser.add_argument(
         "--token",
         default=os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"),
         help="GitHub token. Defaults to GITHUB_TOKEN or GH_TOKEN.",
@@ -556,6 +564,9 @@ def main(argv: list[str]) -> int:
     print(report)
     if args.output:
         Path(args.output).write_text(report, encoding="utf-8")
+    if args.require_projects and (not projects or any(project.get("_error") for project in projects)):
+        print("Health check requires a valid, non-empty project registry.", file=sys.stderr)
+        return 1
     return 0
 
 

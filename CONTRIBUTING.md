@@ -34,8 +34,10 @@ Before opening a pull request, run the relevant checks locally:
 
 ```bash
 bash -n scripts/create-labels.sh
-python -m py_compile scripts/check-affiliated-projects.py
+python scripts/validate-automation.py
+python scripts/validate-issue-forms.py
 node --test scripts/review-affiliation.test.cjs
+python -m unittest discover -s scripts -p 'test_*.py'
 git diff --check
 ```
 
@@ -43,9 +45,12 @@ If you add Python dependencies, document them and update the workflows. Prefer
 standard-library Python for repository automation unless a dependency is clearly
 worth the maintenance cost.
 
-The preliminary-review bot uses Node.js 20 or later and built-in modules only;
-no npm install is required. Its tests mock GitHub and OpenAI, make no network
-calls, and run through the **Automation checks** workflow. Review-trigger changes
+Workflow validation requires Python 3.11 or later, PyYAML 6 (`python -m pip install
+'PyYAML>=6,<7'`), Node.js, and bash. CI uses Python 3.12 and Node.js 24.
+
+The preliminary-review bot uses built-in Node.js modules only; no npm install is
+required. Its tests mock GitHub and OpenAI, make no network calls, and run through
+the **Repository checks** workflow on PRs and pushes to `main`. Review-trigger changes
 should preserve the manual triage-label path, public-only evidence collection,
 single bot-owned report, safe AI fallback, and human decision boundary. Workflow
 YAML must parse before merging.

@@ -13,6 +13,8 @@ an existing application, add `status: needs-triage`; remove and re-add it if it 
 already present. The report updates in place and cannot substitute for the
 skill's deeper investigation or a human decision. See
 [bot setup and sampling limits](bot-workflows.md#preliminary-project-review-bot).
+You can also run **Actions → Affiliation bot → Run workflow** with the issue
+number. Legacy incubation applications are recognized automatically.
 
 ## Review principles
 

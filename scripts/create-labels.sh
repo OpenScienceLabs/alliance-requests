@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="${1:-OpenScienceLabs/affiliation-requests}"
+REPO="${1:-OpenScienceLabs/alliance-requests}"
 
 require_gh() {
   if ! command -v gh >/dev/null 2>&1; then

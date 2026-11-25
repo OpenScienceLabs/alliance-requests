@@ -6,7 +6,9 @@ human judgement for affiliation approval, removal, or reactivation.
 
 ## Intake bot
 
-Triggered when an issue is opened, edited, or reopened.
+Intake and preliminary reviews share the **Affiliation bot** workflow and the
+same application detector. Intake handles opened, edited, reopened, transferred,
+manually selected, and triage-labelled open applications.
 
 Responsibilities:
 
@@ -16,16 +18,23 @@ Responsibilities:
 
 ## Preliminary project-review bot
 
-The **Affiliation preliminary review** workflow runs when an open affiliation
-request is created or when someone adds `status: needs-triage` to it. It recognizes
-`type: affiliation-request` or the `Affiliation request:` title prefix. Other
-issue types and other label events are ignored.
+The **Affiliation bot** requests a review when an open application is created,
+reopened, transferred into this repository, or receives `status: needs-triage`.
+It recognizes `type: affiliation-request`, the `Affiliation request:` title
+prefix, and the older `Incubation application:` prefix. Other issue types and
+other label events are ignored, with a reason in the workflow logs.
 
 To review an existing application, add `type: affiliation-request` if it lacks
-the type label and title prefix, then add `status: needs-triage`. If the triage
-label is already present, remove and re-add it. After an applicant updates their
-issue, re-add the triage label to request another review; edits alone only run
-the intake workflow. Reviewers manage any conflicting status labels themselves.
+the type label and either recognized title prefix, then add `status: needs-triage`.
+If the triage label is already present, remove and re-add it. After an applicant
+updates their issue, re-add the triage label to request another review; edits
+alone run intake only. Reviewers manage conflicting status labels themselves. Older
+headings such as `Current maintenance status`, `Maintenance context`, `Expected
+OSL support`, and `Confirmations` are mapped to their current intake fields.
+
+For a manual review without toggling a status label, open **Actions → Affiliation bot →
+Run workflow**, select the default branch, and enter the issue number (for
+example, `1`). The issue must be open and recognized as an application.
 
 The bot updates one bot-owned preliminary-review comment, gathering fresh evidence
 on each run. Concurrent creation/label events are serialized. It checks form
@@ -47,7 +56,7 @@ commit used for the review.
 
 Setup:
 
-1. Merge the workflow, script, and skill into the repository's default branch and
+1. Merge the workflows, scripts, and skill into the repository's default branch and
    enable GitHub Actions.
 2. Ensure the standard type and status labels exist using
    `scripts/create-labels.sh` as described in [the maintainer guide](maintainer-guide.md).
@@ -55,17 +64,17 @@ Setup:
 4. Optionally set the Actions repository variable `OPENAI_MODEL`. The default is
    `gpt-4.1-mini`; use a model that supports the Responses API and strict structured
    output.
-5. Open an affiliation request or remove and re-add `status: needs-triage` to an
-   existing open application. Inspect the **Affiliation preliminary review** run
-   and its issue comment.
+5. Run **Affiliation bot** manually with the application number, open a new
+   application, or remove and re-add `status: needs-triage` to an existing one.
+   Inspect the workflow run and its issue comment.
 
 GitHub Actions does not load the local `.env` file. Without the API secret, or if
 synthesis fails, the bot still publishes an evidence-only report and explicitly
 requests human review. API failures, refusals, incomplete output, invented
 evidence IDs, and invalid schemas cannot produce an AI assessment. The workflow
 uses the normal `GITHUB_TOKEN` with `contents: read` and `issues: write`; it does
-not need a personal access token. The creation trigger runs independently of
-intake because labels applied with `GITHUB_TOKEN` do not start another workflow.
+not need a personal access token. Intake and review run in the same invocation:
+labels applied with `GITHUB_TOKEN` do not start another workflow.
 See GitHub's [triggering a workflow documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow).
 
 Only public repository evidence is collected through GitHub's API. Applicant
@@ -82,12 +91,22 @@ This is preliminary screening, not the skill's expanded repository/lifecycle
 investigation. It does not trace development cycles, inspect commit diffs or PR
 reviews, fetch prior application discussions, validate external policies, or
 independently test software. Reviewers must investigate critical gaps, human
-ownership, scientific claims, and Alliance expectations. The bot never changes
-labels, closes issues, records a final disposition, or decides membership.
+ownership, scientific claims, and Alliance expectations. Intake adds the type
+label and adds `status: needs-triage` only when no status exists. The assessment
+does not change status or decision labels, close issues, or decide membership.
 
 ## Health-check bot
 
-Runs quarterly and through manual dispatch.
+The **Maintenance** workflow supports manual health checks by selecting the
+`health` task. Scheduled quarterly checks are opt-in: set the Actions repository
+variable `ENABLE_PROJECT_HEALTH_CHECKS` to `true` only after adding a maintained
+`data/affiliated-projects.json` with a non-empty `projects` array. Use the JSON
+format documented by `scripts/check-affiliated-projects.py` and choose the
+authoritative OSL project list before enabling the schedule.
+
+The workflow fails with an explanatory report if the registry is missing,
+malformed, or empty. Script errors are not suppressed. Individual project
+findings remain advisory and require human review.
 
 Checks may include:
 
@@ -107,24 +126,24 @@ Checks may include:
 Outputs:
 
 - Markdown summary in workflow logs;
-- optional `health-check-report.md` artifact;
-- future maintenance review issues for failures; and
-- labels such as `status: at-risk` or `check: license` when a human review is
-  needed.
+- `health-check-report.md` artifact, including available failure explanations.
 
-The bot should never remove affiliation without human review.
+The health check does not open issues, change labels, or remove affiliation.
 
 ## Stale/needs-info bot
 
-For request issues:
+The **Maintenance** workflow supports a manual `reminders` task. Weekly reminders
+are off by default; set the Actions repository variable `ENABLE_STALE_REMINDERS`
+to `true` to enable them.
 
-- after about 30 days waiting on applicant information, comment and keep or apply
-  `status: needs-info`/`status: paused`;
-- after about 60 days waiting on applicant information, close as incomplete or
-  keep paused; and
-- allow applicants to reopen or reapply later.
+Only open issues carrying both `type: affiliation-request` and
+`status: needs-info` are eligible. After about 30 days without activity, the bot
+posts a reminder and adds `bot: stale`. It preserves status labels, excludes
+pull requests, and never closes issues automatically. Reviewers decide any
+pause or closure; maintainer replies clear the stale marker.
 
-For maintenance reviews:
+Maintenance/removal reviews are excluded from these automated reminders. Human
+reviewers may use the following follow-up schedule:
 
 - Day 0: issue opened and maintainers pinged;
 - Day 30: mark at risk if there is no response;
@@ -133,12 +152,24 @@ For maintenance reviews:
 
 ## Link-check bot
 
-Runs weekly, manually, and on pull requests. It checks links in Markdown files
-and issue templates. Link failures should be reviewed before making policy or
-listing changes.
+The **Repository checks** workflow checks links on pull requests, pushes to
+`main`, manual dispatch, and a weekly schedule. It checks Markdown files and
+issue templates. `.lychee.toml` excludes explicit placeholder URLs such as
+`github.com/org/project` and the example issue `123`; real broken links still
+fail the job. It only requires read permissions.
+
+On pull requests, main pushes, and manual runs, the same workflow validates YAML,
+embedded JavaScript, issue forms, and Python/Node/shell script syntax, then runs
+the bot and health-configuration tests. Tests use mocked APIs. The weekly run
+only checks links, so its test job is intentionally skipped.
 
 ## Label check
 
-The label check workflow is manual. It verifies that the label creation script is
-syntactically valid and lists current repository labels. Label creation is done
-with `scripts/create-labels.sh` by a maintainer with appropriate permissions.
+Label-script syntax is checked in **Repository checks**. To list current labels,
+run **Maintenance** manually with the `labels` task. Label creation is done with
+`scripts/create-labels.sh` by a maintainer with appropriate permissions.
+
+The former separate intake, link, label, health, and stale workflow files have
+been consolidated into these three workflows. Keep their old disabled entries
+disabled; they may remain visible in Actions history. Scheduled maintenance jobs
+in the new workflow intentionally skip while their opt-in variables are unset.

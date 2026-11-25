@@ -81,6 +81,8 @@ To request a fresh preliminary review of an existing application, add
 [the project-review skill](.agents/skills/project-review/SKILL.md) and leaves
 membership decisions to humans. See [bot setup](docs/bot-workflows.md#preliminary-project-review-bot)
 to enable AI synthesis with the `OPENAI_API_KEY` Actions secret.
+You can also run **Actions → Affiliation bot → Run workflow** with an existing
+application's issue number. Older `Incubation application:` issues are supported.
 
 ## GSoC and limited programs
 

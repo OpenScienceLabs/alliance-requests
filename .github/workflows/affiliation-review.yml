@@ -1,8 +1,14 @@
-name: Affiliation preliminary review
+name: Affiliation bot
 
 on:
   issues:
-    types: [opened, labeled]
+    types: [opened, edited, reopened, transferred, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Open affiliation/incubation application issue number'
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -10,23 +16,22 @@ permissions:
 
 # Serialize publication so simultaneous opened/labeled events reuse one comment.
 concurrency:
-  group: affiliation-review-${{ github.event.issue.number }}
+  group: affiliation-review-${{ github.event.issue.number || inputs.issue_number }}
   cancel-in-progress: false
 
 jobs:
   review:
     if: >-
-      github.event.issue.state == 'open' &&
-      (github.event.action == 'opened' || github.event.label.name == 'status: needs-triage') &&
-      (contains(github.event.issue.labels.*.name, 'type: affiliation-request') ||
-       startsWith(github.event.issue.title, 'Affiliation request:'))
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.issue.state == 'open' &&
+       (github.event.action != 'labeled' || github.event.label.name == 'status: needs-triage'))
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Review public evidence and update the preliminary report
+      - name: Handle intake and requested preliminary review
         uses: actions/github-script@v7
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}

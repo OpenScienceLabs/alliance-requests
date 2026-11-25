@@ -4,6 +4,7 @@
 const fs = require('node:fs');
 
 const MARKER = '<!-- osl-affiliation-preliminary-review -->';
+const ACK_MARKER = '<!-- osl-affiliation-intake -->';
 const SKILL_PATH = '.agents/skills/project-review/SKILL.md';
 const REQUIRED_FIELDS = [
   'Project name', 'Repository URL', 'Short description', 'Alignment with OSL',
@@ -40,6 +41,15 @@ function sections(body) {
   for (const match of String(body ?? '').matchAll(/^### ([^\r\n]+)\r?\n([\s\S]*?)(?=^### |$(?![\s\S]))/gm)) {
     fields[match[1].trim()] = match[2].trim();
   }
+  const aliases = {
+    'Maintenance status': 'Current maintenance status',
+    'Maintenance notes': 'Maintenance context',
+    'What collaboration are you seeking through OSL?': 'Expected OSL support',
+    'Required checks': 'Confirmations',
+  };
+  for (const [name, alias] of Object.entries(aliases)) {
+    if ((!fields[name] || fields[name] === '_No response_') && fields[alias]) fields[name] = fields[alias];
+  }
   return fields;
 }
 
@@ -59,13 +69,13 @@ function repositorySlug(value) {
 
 function isApplication(issue) {
   return !issue.pull_request && issue.state === 'open' &&
-    (issue.title?.startsWith('Affiliation request:') ||
+    (/^(?:Affiliation request|Incubation application):/.test(issue.title ?? '') ||
      issue.labels?.some(label => (typeof label === 'string' ? label : label.name) === 'type: affiliation-request'));
 }
 
 function shouldReview(payload) {
   return isApplication(payload.issue ?? {}) &&
-    (payload.action === 'opened' ||
+    (['opened', 'reopened', 'transferred'].includes(payload.action) ||
      (payload.action === 'labeled' && payload.label?.name === 'status: needs-triage'));
 }
 
@@ -281,15 +291,43 @@ function renderReport(bundle, synthesis, { guidelineUrl, synthesisStatus }) {
   for (const entry of bundle.evidence) {
     lines.push(`| ${entry.id} | ${entry.type} | [${plain(entry.title)}](${entry.url}) | ${plain(entry.detail.slice(0, 650))} |`);
   }
-  lines.push('', 'To request a fresh review, remove and re-add `status: needs-triage`. This report does not change labels or record a membership decision.');
+  lines.push('', 'To request a fresh review, remove and re-add `status: needs-triage`, or run Affiliation bot manually with this issue number. This assessment does not change status or decision labels or record a membership decision.');
   return lines.join('\n');
 }
 
 async function run({ github, context, core, fetchImpl = fetch }) {
-  if (!shouldReview(context.payload)) return;
-  const issueArgs = { ...context.repo, issue_number: context.payload.issue.number };
+  const manual = context.eventName === 'workflow_dispatch';
+  if (!manual && !shouldReview(context.payload) &&
+      !(context.payload.action === 'edited' && isApplication(context.payload.issue ?? {}))) {
+    core.info('No review requested: use an open affiliation/incubation application and the status: needs-triage label.');
+    return;
+  }
+  const rawNumber = manual ? context.payload.inputs?.issue_number : context.payload.issue.number;
+  if (!/^[1-9][0-9]*$/.test(String(rawNumber)) || !Number.isSafeInteger(Number(rawNumber))) {
+    throw new Error('A positive integer issue_number is required.');
+  }
+  const issueArgs = { ...context.repo, issue_number: Number(rawNumber) };
   const { data: issue } = await github.rest.issues.get(issueArgs);
-  if (!isApplication(issue)) return;
+  if (!isApplication(issue)) {
+    core.info('Issue is closed or is not an affiliation/incubation application; skipping.');
+    return;
+  }
+  const comments = await github.paginate(github.rest.issues.listComments, { ...issueArgs, per_page: 100 });
+  const labelNames = issue.labels.map(label => typeof label === 'string' ? label : label.name);
+  const labels = [];
+  if (!labelNames.includes('type: affiliation-request')) labels.push('type: affiliation-request');
+  if (!labelNames.some(name => name.startsWith('status: '))) labels.push('status: needs-triage');
+  if (labels.length) await github.rest.issues.addLabels({ ...issueArgs, labels });
+  if (context.payload.action === 'opened' && !comments.some(comment =>
+    comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(ACK_MARKER))) {
+    await github.rest.issues.createComment({ ...issueArgs, body: [
+      ACK_MARKER,
+      'Thanks for opening an OSL affiliation request. A preliminary report will collect evidence for human reviewers.',
+      'Affiliation leaves governance and maintenance with the project. It does not guarantee funding, GSoC participation, contributors, mentors, promotion or scientific certification.',
+    ].join('\n\n') });
+  }
+  // Edits refresh routine intake labels; a label or manual dispatch requests a review.
+  if (!manual && !shouldReview(context.payload)) return;
   const skill = fs.readFileSync(SKILL_PATH, 'utf8');
   const policy = fs.readFileSync('docs/criteria.md', 'utf8');
   const bundle = await collectEvidence({ github, issue, repository: `${context.repo.owner}/${context.repo.repo}` });
@@ -320,14 +358,13 @@ async function run({ github, context, core, fetchImpl = fetch }) {
     core.info('Application closed, reclassified or edited during review; skipping stale publication. Re-add the triage label to retry.');
     return;
   }
-  const comments = await github.paginate(github.rest.issues.listComments, { ...issueArgs, per_page: 100 });
   const existing = comments.find(comment => comment.user?.login === 'github-actions[bot]' && comment.body?.startsWith(MARKER));
   if (existing) {
     await github.rest.issues.updateComment({ ...context.repo, comment_id: existing.id, body });
   } else {
     await github.rest.issues.createComment({ ...issueArgs, body });
   }
-  core.info('Published the preliminary review; labels and membership decisions remain with human reviewers.');
+  core.info('Published the preliminary review; affiliation status and membership decisions remain with human reviewers.');
 }
 
-module.exports = { MARKER, SYNTHESIS_SCHEMA, collectEvidence, plain, redact, renderReport, repositorySlug, run, sections, shouldReview, synthesize, validateSynthesis };
+module.exports = { ACK_MARKER, MARKER, SYNTHESIS_SCHEMA, collectEvidence, plain, redact, renderReport, repositorySlug, run, sections, shouldReview, synthesize, validateSynthesis };

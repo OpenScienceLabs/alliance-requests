@@ -3,7 +3,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const {
-  MARKER, collectEvidence, renderReport, repositorySlug, run, sections,
+  ACK_MARKER, MARKER, collectEvidence, renderReport, repositorySlug, run, sections,
   shouldReview, synthesize, validateSynthesis,
 } = require('./review-affiliation.cjs');
 
@@ -19,6 +19,7 @@ const context = {
 
 function fixture() {
   const calls = [];
+  const currentIssue = structuredClone(issue);
   const comments = [{ id: 1, user: { login: 'applicant' }, body: MARKER }];
   const wrap = (name, fn) => async args => { calls.push({ name, args }); return { data: await fn(args) }; };
   const github = { rest: {
@@ -33,18 +34,21 @@ function fixture() {
       getTree: wrap('tree', () => ({ tree: ['README.md', 'LICENSE', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md', 'SECURITY.md', 'package.json', '.github/workflows/test.yml', 'tests/test.py', 'src/core.py'].map(path => ({ path, type: 'blob' })) })),
     },
     issues: {
-      get: wrap('issue', () => structuredClone(issue)),
+      get: wrap('issue', () => structuredClone(currentIssue)),
+      addLabels: wrap('labels', args => {
+        currentIssue.labels.push(...args.labels.map(name => ({ name })));
+      }),
       listForRepo: wrap('issues', () => [{ number: 3, title: 'A PR', pull_request: {} }, { number: 2, title: 'A bug' }]),
       listComments: wrap('comments', () => comments),
       createComment: wrap('create', args => {
-        comments.push({ id: 2, user: { login: 'github-actions[bot]' }, body: args.body });
+        comments.push({ id: comments.length + 1, user: { login: 'github-actions[bot]' }, body: args.body });
       }),
       updateComment: wrap('update', args => { comments.find(item => item.id === args.comment_id).body = args.body; }),
     },
     actions: { listWorkflowRunsForRepo: wrap('runs', () => ({ workflow_runs: [] })) },
   } };
   github.paginate = async (method, args) => (await method(args)).data;
-  return { github, calls, comments, core: { info() {}, warning() {} } };
+  return { github, calls, comments, currentIssue, core: { info() {}, warning() {} } };
 }
 
 const collect = github => collectEvidence({ github, issue, repository: 'OpenScienceLabs/alliance-requests', now: new Date('2026-11-25T00:00:00Z') });
@@ -69,6 +73,30 @@ test('creation and the exact triage label trigger affiliation reviews, including
     { action: 'opened', issue: { ...issue, title: 'Bug report' } },
     { action: 'opened', issue: { ...issue, pull_request: {} } },
   ]) assert.equal(shouldReview(payload), false);
+});
+
+test('transferred incubation applications can be reviewed without a type label', () => {
+  const legacy = { ...issue, title: 'Incubation application: Formulon Physics', labels: [{ name: 'status: in-review' }] };
+  for (const action of ['opened', 'reopened', 'transferred', 'labeled']) {
+    assert.equal(shouldReview({ action, label: { name: 'status: needs-triage' }, issue: legacy }), true);
+  }
+  assert.equal(shouldReview({ action: 'edited', issue: legacy }), false);
+});
+
+test('legacy form headings satisfy the corresponding intake fields without replacing current answers', async () => {
+  const body = [
+    '### Project name\nExample', '### Repository URL\nhttps://gitlab.com/example/tool',
+    '### Short description\nTool', '### Alignment with OSL\nScience',
+    '### License link\nPublic policy', '### Code of Conduct link\nPublic policy',
+    '### Maintainers\nSomeone', '### Public communication channel or contact path\nIssues',
+    '### Current maintenance status\nStable', '### Maintenance context\nMaintained',
+    '### Expected OSL support\nCommunity', '### Confirmations\n- [x] Understood',
+  ].join('\n\n');
+  const bundle = await collectEvidence({ github: {}, issue: { ...issue, body }, repository: 'org/repo' });
+  assert.deepEqual(bundle.missing_fields, []);
+  const fields = sections(`${body}\n\n### Maintenance status\nActive`);
+  assert.equal(fields['Maintenance status'], 'Active');
+  assert.equal(fields['Required checks'], '- [x] Understood');
 });
 
 test('form parsing handles CRLF and ignores body links outside the repository field', () => {
@@ -198,10 +226,11 @@ test('repeated reviews reuse the bot comment and never edit an applicant marker 
   const mock = fixture();
   await run({ ...mock, context });
   await run({ ...mock, context: { ...context, payload: { action: 'labeled', issue, label: { name: 'status: needs-triage' } } } });
-  assert.equal(mock.calls.filter(call => call.name === 'create').length, 1);
+  assert.equal(mock.calls.filter(call => call.name === 'create' && call.args.body.startsWith(MARKER)).length, 1);
+  assert.equal(mock.calls.filter(call => call.name === 'create' && call.args.body.startsWith(ACK_MARKER)).length, 1);
   assert.equal(mock.calls.filter(call => call.name === 'update').length, 1);
   assert.equal(mock.comments[0].body, MARKER);
-  assert.match(mock.comments[1].body, /not configured/);
+  assert.match(mock.comments.find(comment => comment.body.startsWith(MARKER) && comment.user.login === 'github-actions[bot]').body, /not configured/);
 });
 
 test('AI service failure still publishes evidence without leaking the error', async t => {
@@ -210,9 +239,10 @@ test('AI service failure still publishes evidence without leaking the error', as
   t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
   const mock = fixture();
   await run({ ...mock, context, fetchImpl: async () => { throw new Error('unit-test-key private diagnostic'); } });
-  assert.match(mock.comments[1].body, /evidence-only fallback/);
-  assert.equal(mock.comments[1].body.includes('unit-test-key'), false);
-  assert.equal(mock.comments[1].body.includes('private diagnostic'), false);
+  const report = mock.comments.find(comment => comment.user.login === 'github-actions[bot]' && comment.body.startsWith(MARKER));
+  assert.match(report.body, /evidence-only fallback/);
+  assert.equal(report.body.includes('unit-test-key'), false);
+  assert.equal(report.body.includes('private diagnostic'), false);
 });
 
 test('a changed application cannot receive a stale report', async t => {
@@ -223,5 +253,40 @@ test('a changed application cannot receive a stale report', async t => {
   let reads = 0;
   mock.github.rest.issues.get = async () => ({ data: { ...issue, body: ++reads === 1 ? issue.body : 'Updated application' } });
   await run({ ...mock, context });
-  assert.equal(mock.comments.length, 1);
+  assert.equal(mock.comments.filter(comment => comment.user.login === 'github-actions[bot]' && comment.body.startsWith(MARKER)).length, 0);
+});
+
+test('manual dispatch reviews the selected issue without requiring a new label event', async t => {
+  const oldKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
+  const mock = fixture();
+  mock.currentIssue.title = 'Incubation application: Formulon Physics';
+  mock.currentIssue.labels = [{ name: 'status: in-review' }];
+  await run({ ...mock, context: { ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '7' } } } });
+  assert.ok(mock.calls.filter(call => call.name === 'issue').every(call => call.args.issue_number === 7));
+  assert.equal(mock.calls.filter(call => call.name === 'create' && call.args.body.startsWith(MARKER)).length, 1);
+  assert.deepEqual(mock.calls.find(call => call.name === 'labels').args.labels, ['type: affiliation-request']);
+  assert.equal(mock.currentIssue.labels.filter(label => label.name.startsWith('status: ')).length, 1);
+});
+
+test('edited applications receive routine intake labels without starting AI review', async () => {
+  const mock = fixture();
+  await run({ ...mock, context: { ...context, payload: { action: 'edited', issue } } });
+  assert.deepEqual(mock.calls.find(call => call.name === 'labels').args.labels, ['type: affiliation-request', 'status: needs-triage']);
+  assert.equal(mock.calls.some(call => call.name === 'repo' || call.name === 'create'), false);
+});
+
+test('manual dispatch rejects invalid issue numbers and skips unrelated or closed issues', async () => {
+  for (const number of ['', '0', '-1', '1.5', '1; echo secret', '9007199254740992']) {
+    const mock = fixture();
+    await assert.rejects(run({ ...mock, context: { ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: number } } } }), /positive integer/);
+    assert.equal(mock.calls.length, 0);
+  }
+  for (const update of [{ state: 'closed' }, { title: 'Maintenance review: Example', labels: [{ name: 'type: maintenance-review' }] }]) {
+    const mock = fixture();
+    Object.assign(mock.currentIssue, update);
+    await run({ ...mock, context: { ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '7' } } } });
+    assert.equal(mock.calls.some(call => ['create', 'labels', 'repo'].includes(call.name)), false);
+  }
 });
