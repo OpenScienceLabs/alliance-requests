@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
   schedule:
     - cron: '0 10 * * 1'
@@ -13,7 +14,7 @@ permissions:
 
 jobs:
   test:
-    if: github.event_name != 'schedule'
+    if: github.event_name != 'schedule' && github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -35,6 +36,7 @@ jobs:
       - name: Test health-check configuration handling
         run: python -m unittest discover -s scripts -p 'test_*.py'
   links:
+    if: github.event.action != 'labeled'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -46,3 +48,42 @@ jobs:
           args: --config .lychee.toml --verbose --no-progress './**/*.md' './.github/**/*.yml'
         env:
           GITHUB_TOKEN: ${{ github.token }}
+  review-preview:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      contains(github.event.pull_request.labels.*.name, 'ci: review-preview') &&
+      (github.event.action != 'labeled' || github.event.label.name == 'ci: review-preview')
+    permissions:
+      contents: read
+      issues: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - name: Generate a live evaluation without issue mutations
+        uses: actions/github-script@v9.0.0
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-4.1-mini' }}
+          REVIEW_PREVIEW_ISSUE: ${{ vars.REVIEW_PREVIEW_ISSUE || '1' }}
+        with:
+          script: |
+            const { run } = require('./scripts/review-affiliation.cjs');
+            await run({
+              github, core, publish: false,
+              context: {
+                ...context, repo: context.repo, eventName: 'workflow_dispatch',
+                payload: { ...context.payload, inputs: { issue_number: process.env.REVIEW_PREVIEW_ISSUE } }
+              },
+              outputDirectory: require('node:path').join(process.env.RUNNER_TEMP, 'osl-review')
+            });
+      - name: Save evaluation and outcome
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: affiliation-review-preview
+          path: ${{ runner.temp }}/osl-review/
+          if-no-files-found: warn

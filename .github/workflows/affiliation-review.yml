@@ -9,6 +9,10 @@ on:
         description: 'Open affiliation/incubation application issue number'
         required: true
         type: string
+      preview:
+        description: 'Generate an evaluation in the run summary without changing the issue'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -39,4 +43,16 @@ jobs:
         with:
           script: |
             const { run } = require('./scripts/review-affiliation.cjs');
-            await run({ github, context, core });
+            const preview = context.ref !== `refs/heads/${context.payload.repository.default_branch}` ||
+              context.payload.inputs?.preview === 'true';
+            await run({
+              github, context, core, publish: !preview,
+              outputDirectory: require('node:path').join(process.env.RUNNER_TEMP, 'osl-review')
+            });
+      - name: Save evaluation and outcome
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: affiliation-review-${{ github.event.issue.number || inputs.issue_number }}
+          path: ${{ runner.temp }}/osl-review/
+          if-no-files-found: warn

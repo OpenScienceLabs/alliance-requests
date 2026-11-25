@@ -80,9 +80,11 @@ To request a fresh preliminary review of an existing application, add
 `status: needs-triage` (remove and re-add it if already present). The bot follows
 [the project-review skill](.agents/skills/project-review/SKILL.md) and leaves
 membership decisions to humans. See [bot setup](docs/bot-workflows.md#preliminary-project-review-bot)
-to enable AI synthesis with the `OPENAI_API_KEY` Actions secret.
+for the required `OPENAI_API_KEY` Actions secret and safe failure diagnostics.
 You can also run **Actions → Affiliation bot → Run workflow** with an existing
 application's issue number. Older `Incubation application:` issues are supported.
+Use [read-only preview](docs/bot-workflows.md#verify-before-merging) to verify a
+candidate branch against the real model before merging.
 
 ## GSoC and limited programs
 

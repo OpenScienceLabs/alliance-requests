@@ -52,8 +52,13 @@ The preliminary-review bot uses built-in Node.js modules only; no npm install is
 required. Its tests mock GitHub and OpenAI, make no network calls, and run through
 the **Repository checks** workflow on PRs and pushes to `main`. Review-trigger changes
 should preserve the manual triage-label path, public-only evidence collection,
-single bot-owned report, safe AI fallback, and human decision boundary. Workflow
+single bot-owned report, safe AI failure handling, and human decision boundary. Workflow
 YAML must parse before merging.
+
+AI failures must fail the requested review and preserve any previous public
+evaluation. Test generation through verified comment readback, and use the
+[live read-only preview](docs/bot-workflows.md#verify-before-merging) before merging
+review changes. Mocked tests alone do not verify model availability or output.
 
 ## Pull request expectations
 

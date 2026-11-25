@@ -2,10 +2,16 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const path = require('node:path');
 const {
-  ACK_MARKER, MARKER, applyIntakeLabels, collectEvidence, renderReport, repositorySlug, run, sections,
+  ACK_MARKER, MARKER, applyIntakeLabels, collectEvidence, renderReport, repositorySlug, reviewSchema, run, sections,
   shouldReview, synthesize, validateSynthesis,
 } = require('./review-affiliation.cjs');
+
+const originalKey = process.env.OPENAI_API_KEY;
+test.before(() => { process.env.OPENAI_API_KEY = 'unit-test-key'; });
+test.after(() => { if (originalKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = originalKey; });
 
 const SHA = 'a'.repeat(40);
 const issue = {
@@ -21,6 +27,7 @@ function fixture() {
   const calls = [];
   const currentIssue = structuredClone(issue);
   const comments = [{ id: 1, user: { login: 'applicant' }, body: MARKER }];
+  const summaries = [];
   const wrap = (name, fn) => async args => { calls.push({ name, args }); return { data: await fn(args) }; };
   const github = { rest: {
     repos: {
@@ -34,22 +41,35 @@ function fixture() {
       getTree: wrap('tree', () => ({ tree: ['README.md', 'LICENSE', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md', 'SECURITY.md', 'package.json', '.github/workflows/test.yml', 'tests/test.py', 'src/core.py'].map(path => ({ path, type: 'blob' })) })),
     },
     issues: {
-      get: wrap('issue', () => structuredClone(currentIssue)),
+      get: wrap('issue', args => structuredClone({ ...currentIssue, number: args.issue_number })),
       addLabels: wrap('labels', args => {
         const existing = new Set(currentIssue.labels.map(label => label.name));
         currentIssue.labels.push(...args.labels.filter(name => !existing.has(name)).map(name => ({ name })));
       }),
       listForRepo: wrap('issues', () => [{ number: 3, title: 'A PR', pull_request: {} }, { number: 2, title: 'A bug' }]),
       listComments: wrap('comments', () => comments),
+      getComment: wrap('readback', args => structuredClone(comments.find(item => item.id === args.comment_id))),
       createComment: wrap('create', args => {
-        comments.push({ id: comments.length + 1, user: { login: 'github-actions[bot]' }, body: args.body });
+        const comment = { id: comments.length + 1, user: { login: 'github-actions[bot]' }, body: args.body };
+        comments.push(comment);
+        return structuredClone(comment);
       }),
       updateComment: wrap('update', args => { comments.find(item => item.id === args.comment_id).body = args.body; }),
     },
     actions: { listWorkflowRunsForRepo: wrap('runs', () => ({ workflow_runs: [] })) },
   } };
   github.paginate = async (method, args) => (await method(args)).data;
-  return { github, calls, comments, currentIssue, core: { info() {}, warning() {} } };
+  return {
+    github, calls, comments, currentIssue, summaries, wait: async () => {},
+    core: { info() {}, warning() {}, summary: { addRaw(text) { summaries.push(text); return this; }, async write() {} } },
+    fetchImpl: async (url, options) => modelResponse(validResult(JSON.parse(JSON.parse(options.body).input[0].content))),
+  };
+}
+
+function modelResponse(result) {
+  return { ok: true, status: 200, headers: new Headers({ 'x-request-id': 'req-unit-test' }), json: async () => ({
+    status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: JSON.stringify(result) }] }],
+  }) };
 }
 
 const collect = github => collectEvidence({ github, issue, repository: 'OpenScienceLabs/alliance-requests', now: new Date('2026-11-25T00:00:00Z') });
@@ -222,7 +242,7 @@ test('public rendering neutralizes applicant Markdown, mentions, emails and link
 
 test('repeated reviews reuse the bot comment and never edit an applicant marker spoof', async t => {
   const oldKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'unit-test-key';
   t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
   const mock = fixture();
   await run({ ...mock, context });
@@ -231,35 +251,38 @@ test('repeated reviews reuse the bot comment and never edit an applicant marker 
   assert.equal(mock.calls.filter(call => call.name === 'create' && call.args.body.startsWith(ACK_MARKER)).length, 1);
   assert.equal(mock.calls.filter(call => call.name === 'update').length, 1);
   assert.equal(mock.comments[0].body, MARKER);
-  assert.match(mock.comments.find(comment => comment.body.startsWith(MARKER) && comment.user.login === 'github-actions[bot]').body, /not configured/);
+  assert.match(mock.comments.find(comment => comment.body.startsWith(MARKER) && comment.user.login === 'github-actions[bot]').body, /AI synthesis: completed/);
 });
 
-test('AI service failure still publishes evidence without leaking the error', async t => {
+test('AI service failure fails the run and preserves the previous public evaluation', async t => {
   const oldKey = process.env.OPENAI_API_KEY;
   process.env.OPENAI_API_KEY = 'unit-test-key';
   t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
   const mock = fixture();
-  await run({ ...mock, context, fetchImpl: async () => { throw new Error('unit-test-key private diagnostic'); } });
-  const report = mock.comments.find(comment => comment.user.login === 'github-actions[bot]' && comment.body.startsWith(MARKER));
-  assert.match(report.body, /evidence-only fallback/);
-  assert.equal(report.body.includes('unit-test-key'), false);
-  assert.equal(report.body.includes('private diagnostic'), false);
+  const previous = { id: 2, user: { login: 'github-actions[bot]' }, body: `${MARKER}\nPrevious evaluation` };
+  mock.comments.push(previous);
+  await assert.rejects(run({ ...mock, context, fetchImpl: async () => { throw new Error('unit-test-key private diagnostic'); } }), error => error.code === 'OPENAI_NETWORK_ERROR');
+  assert.equal(previous.body, `${MARKER}\nPrevious evaluation`);
+  assert.equal(mock.calls.some(call => ['create', 'update', 'labels'].includes(call.name)), false);
+  assert.match(mock.summaries[0], /Review outcome: failed/);
+  assert.equal(mock.summaries[0].includes('private diagnostic'), false);
+  assert.equal(mock.summaries[0].includes('unit-test-key'), false);
 });
 
 test('a changed application cannot receive a stale report', async t => {
   const oldKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'unit-test-key';
   t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
   const mock = fixture();
   let reads = 0;
   mock.github.rest.issues.get = async () => ({ data: { ...issue, body: ++reads === 1 ? issue.body : 'Updated application' } });
-  await run({ ...mock, context });
+  await assert.rejects(run({ ...mock, context }), error => error.code === 'APPLICATION_CHANGED');
   assert.equal(mock.comments.filter(comment => comment.user.login === 'github-actions[bot]' && comment.body.startsWith(MARKER)).length, 0);
 });
 
 test('manual dispatch reviews the selected issue without requiring a new label event', async t => {
   const oldKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'unit-test-key';
   t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
   const mock = fixture();
   mock.currentIssue.title = 'Incubation application: Formulon Physics';
@@ -287,14 +310,14 @@ test('manual dispatch rejects invalid issue numbers and skips unrelated or close
   for (const update of [{ state: 'closed' }, { title: 'Maintenance review: Example', labels: [{ name: 'type: maintenance-review' }] }]) {
     const mock = fixture();
     Object.assign(mock.currentIssue, update);
-    await run({ ...mock, context: { ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '7' } } } });
+    await assert.rejects(run({ ...mock, context: { ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '7' } } } }), error => error.code === 'APPLICATION_NOT_REVIEWABLE');
     assert.equal(mock.calls.some(call => ['create', 'labels', 'repo'].includes(call.name)), false);
   }
 });
 
 test('transient label errors retry with bounded backoff and recover without repeating comments', async t => {
   const oldKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'unit-test-key';
   t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
   const mock = fixture();
   const addLabels = mock.github.rest.issues.addLabels;
@@ -317,7 +340,7 @@ test('transient label errors retry with bounded backoff and recover without repe
 
 test('persistent label server errors warn and still publish a review for the legacy application', async t => {
   const oldKey = process.env.OPENAI_API_KEY;
-  delete process.env.OPENAI_API_KEY;
+  process.env.OPENAI_API_KEY = 'unit-test-key';
   t.after(() => { if (oldKey === undefined) delete process.env.OPENAI_API_KEY; else process.env.OPENAI_API_KEY = oldKey; });
   const mock = fixture();
   mock.currentIssue.title = 'Incubation application: Formulon Physics';
@@ -369,6 +392,134 @@ test('comment creation errors stay visible and cannot be duplicated by the label
   };
   await assert.rejects(run({ ...mock, context: {
     ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '1' } },
-  } }), /comment service unavailable/);
+  } }), error => error.code === 'REVIEW_PUBLICATION_FAILED');
   assert.equal(attempts, 1);
+});
+
+test('a real review result is rendered, saved, read back, and linked as the successful outcome', async () => {
+  const mock = fixture();
+  const outcome = await run({ ...mock, context });
+  assert.equal(outcome.status, 'published');
+  assert.equal(outcome.rubric_areas, 12);
+  assert.equal(outcome.revision, SHA);
+  assert.equal(outcome.readiness, 'human_judgment_required');
+  assert.match(outcome.comment_url, /issues\/7#issuecomment-2$/);
+  const report = mock.comments.find(comment => comment.body.startsWith(MARKER) && comment.user.login === 'github-actions[bot]');
+  assert.match(report.body, /\| R12 \| human_review \|/);
+  assert.equal(mock.calls.find(call => call.name === 'readback').args.comment_id, report.id);
+  assert.match(mock.summaries[0], /Review outcome: published/);
+  assert.match(mock.summaries[0], /Verified issue comment/);
+});
+
+test('read-only preview produces the complete evaluation and artifacts without issue mutations', async t => {
+  const outputDirectory = fs.mkdtempSync(path.join(__dirname, '.review-test-'));
+  t.after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
+  const mock = fixture();
+  const outcome = await run({ ...mock, context, publish: false, outputDirectory });
+  assert.equal(outcome.status, 'preview');
+  assert.equal(outcome.rubric_areas, 12);
+  assert.equal(mock.calls.some(call => ['create', 'update', 'labels', 'readback'].includes(call.name)), false);
+  const report = fs.readFileSync(path.join(outputDirectory, 'report.md'), 'utf8');
+  assert.match(report, /\| R1 \| human_review \|/);
+  assert.match(report, /\| R12 \| human_review \|/);
+  assert.equal(report.includes('unit-test-key'), false);
+  const saved = JSON.parse(fs.readFileSync(path.join(outputDirectory, 'result.json')));
+  assert.equal(saved.status, 'preview');
+  assert.equal(saved.revision, SHA);
+  assert.equal(saved.rubric_areas, 12);
+});
+
+test('the provider schema enforces rubric IDs, item counts, and real evidence references', async () => {
+  const bundle = await collect(fixture().github);
+  const schema = reviewSchema(bundle);
+  assert.equal(schema.properties.criteria.minItems, 12);
+  assert.equal(schema.properties.criteria.maxItems, 12);
+  assert.equal(schema.properties.risks.maxItems, 8);
+  assert.deepEqual(schema.properties.criteria.items.properties.criterion.enum, Array.from({ length: 12 }, (_, i) => `R${i + 1}`));
+  assert.deepEqual(schema.properties.criteria.items.properties.evidence_ids.items.enum, bundle.evidence.map(entry => entry.id));
+});
+
+test('invalid decision vocabulary gets one corrective model request before publication', async () => {
+  const mock = fixture();
+  const retryWarnings = [];
+  const requests = [];
+  mock.core.warning = warning => { retryWarnings.push(warning); };
+  const outcome = await run({ ...mock, context, fetchImpl: async (url, options) => {
+    const request = JSON.parse(options.body);
+    requests.push(request);
+    const bundle = JSON.parse(request.input[0].content);
+    const result = validResult(bundle);
+    if (requests.length === 1) result.criteria[11].rationale = 'The project uses an OSI-approved license.';
+    else assert.equal(mock.calls.some(call => ['create', 'update'].includes(call.name)), false);
+    return modelResponse(result);
+  } });
+  assert.equal(outcome.status, 'published');
+  assert.equal(requests.length, 2);
+  assert.match(requests[1].input[1].content, /forbidden decision vocabulary/);
+  assert.match(retryWarnings[0], /REVIEW_VALIDATION_FAILED/);
+  assert.equal(mock.calls.filter(call => call.name === 'create' && call.args.body.startsWith(MARKER)).length, 1);
+});
+
+test('persistent invalid synthesis fails with useful diagnostics and never overwrites an older evaluation', async t => {
+  const outputDirectory = fs.mkdtempSync(path.join(__dirname, '.review-test-'));
+  t.after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
+  const mock = fixture();
+  const previous = { id: 2, user: { login: 'github-actions[bot]' }, body: `${MARKER}\nExisting complete evaluation` };
+  mock.comments.push(previous);
+  let requests = 0;
+  await assert.rejects(run({ ...mock, context, outputDirectory, fetchImpl: async (url, options) => {
+    requests++;
+    const result = validResult(JSON.parse(JSON.parse(options.body).input[0].content));
+    result.criteria[3].evidence_ids = ['E999'];
+    return modelResponse(result);
+  } }), error => error.code === 'REVIEW_VALIDATION_FAILED');
+  assert.equal(requests, 2);
+  assert.equal(previous.body, `${MARKER}\nExisting complete evaluation`);
+  assert.equal(mock.calls.some(call => ['create', 'update', 'labels'].includes(call.name)), false);
+  const saved = JSON.parse(fs.readFileSync(path.join(outputDirectory, 'result.json')));
+  assert.equal(saved.status, 'failed');
+  assert.equal(saved.stage, 'synthesis');
+  assert.equal(saved.diagnostic.request_id, 'req-unit-test');
+  assert.match(saved.diagnostic.problems[0], /criteria\[3\].evidence_ids/);
+});
+
+test('HTTP authentication, quota and schema errors expose safe provider codes without retrying or echoing secrets', async () => {
+  const mock = fixture();
+  const bundle = await collect(mock.github);
+  for (const [status, code] of [[401, 'invalid_api_key'], [429, 'insufficient_quota'], [400, 'invalid_json_schema']]) {
+    let requests = 0;
+    await assert.rejects(synthesize(bundle, {
+      apiKey: 'unit-test-key', model: 'test', skill: '', policy: '',
+      fetchImpl: async () => {
+        requests++;
+        return { ok: false, status, headers: new Headers({ 'x-request-id': 'req-diagnostic' }), json: async () => ({ error: {
+          code, type: 'invalid_request_error', message: 'unit-test-key private credential',
+        } }) };
+      },
+    }), error => error.code === 'OPENAI_HTTP_ERROR' && error.details.provider_code === code &&
+      error.details.http_status === status && error.details.request_id === 'req-diagnostic' &&
+      !JSON.stringify(error).includes('unit-test-key'));
+    assert.equal(requests, 1);
+  }
+});
+
+test('missing model credentials and incomplete responses cannot be reported as successful evaluations', async t => {
+  const oldKey = process.env.OPENAI_API_KEY;
+  delete process.env.OPENAI_API_KEY;
+  t.after(() => { process.env.OPENAI_API_KEY = oldKey; });
+  const mock = fixture();
+  await assert.rejects(run({ ...mock, context }), error => error.code === 'OPENAI_KEY_MISSING');
+  assert.equal(mock.calls.some(call => ['create', 'update', 'labels'].includes(call.name)), false);
+  process.env.OPENAI_API_KEY = oldKey;
+  await assert.rejects(run({ ...fixture(), context, fetchImpl: async () => ({
+    ok: true, status: 200, json: async () => ({ status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' } }),
+  }) }), error => error.code === 'OPENAI_INCOMPLETE' && error.message.includes('max_output_tokens'));
+});
+
+test('a mismatched publication readback fails instead of claiming that an evaluation was applied', async () => {
+  const mock = fixture();
+  mock.github.rest.issues.getComment = async () => ({ data: { body: 'A different comment', user: { login: 'github-actions[bot]' } } });
+  await assert.rejects(run({ ...mock, context }), error => error.code === 'REVIEW_PUBLICATION_UNVERIFIED');
+  assert.match(mock.summaries[0], /Review outcome: failed/);
+  assert.equal(mock.summaries[0].includes('Verified issue comment'), false);
 });

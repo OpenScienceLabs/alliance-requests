@@ -61,5 +61,6 @@ create_label "decision: deferred" "FBCA04" "Deferred decision"
 create_label "bot: health-check" "EDEDED" "Created or updated by health-check automation"
 create_label "bot: stale" "EDEDED" "Created or updated by stale automation"
 create_label "bot: link-check" "EDEDED" "Created or updated by link-check automation"
+create_label "ci: review-preview" "BFD4F2" "Run a live read-only review preview on a same-repository PR"
 
 echo "Done."

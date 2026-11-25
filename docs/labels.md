@@ -3,6 +3,13 @@
 Use labels to make review state clear and searchable. The script
 `scripts/create-labels.sh` creates or updates the labels listed here.
 
+## CI labels
+
+- `ci: review-preview` — opt into a live model evaluation on a pull request from
+  this repository. It reads the configured pilot issue and publishes the preview
+  in the run summary and artifact, with no changes to application issues. Fork
+  pull requests cannot run this job. See [preview setup](bot-workflows.md#verify-before-merging).
+
 ## Type labels
 
 - `type: affiliation-request` — request to affiliate a project with OSL.
