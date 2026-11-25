@@ -42,7 +42,18 @@ For a manual review without toggling a status label, open **Actions → Affiliat
 Run workflow**, select the default branch, and enter the issue number (for
 example, `1`). The issue must be open and recognized as an application.
 The run summary links the verified evaluation comment. Reports update the
-existing bot comment, so a fresh evaluation does not add another issue reply.
+existing bot comment. After a verified update, the bot adds one short reply:
+“The project evaluation has been updated. Please read the latest review and
+follow-up checklist,” with a direct link to that comment. Initial publication
+does not add an update notice, and previews never post one.
+
+The report starts with a plain-language summary, what is working well, and the
+priority concerns. All twelve detailed findings, their supporting evidence,
+reviewer-only follow-up, and scope information are in a collapsed **Detailed
+findings, evidence, and review scope** section. The final **Your follow-up
+checklist** lists missing application fields, concrete maintainer actions or
+clarifications, and the evidence needed for another review. OSL reviewers' work
+and optional suggestions are kept separate from maintainer requirements.
 
 The bot updates one bot-owned preliminary-review comment, gathering fresh evidence
 on each run. Concurrent creation/label events are serialized. It checks form
@@ -104,13 +115,20 @@ the [Responses API structured-output format](https://developers.openai.com/api/d
 with response storage disabled. Email addresses, common credential patterns, and
 known runtime tokens are redacted before synthesis and publication; this is not a
 comprehensive secret scan. Public text is escaped to prevent unintended Markdown,
-links, and mentions. Only the bot's own report comment is updated.
+links, and mentions. Only the bot's own report comment is edited; an update reply
+links back to it without mentioning or tagging anyone.
 
 Success requires all twelve rubric areas, a valid advisory assessment, and a
 successful readback of the saved issue comment matching the generated report.
+Updates also require a verified notification reply. A report fingerprint prevents
+duplicate replies for the same evaluation. If GitHub loses a creation response,
+the bot checks whether the reply already exists rather than posting blindly
+again. If notification fails, the run fails at the notification stage while
+retaining the saved evaluation and its verified URL.
 Each run saves `report.md` and `result.json` in an artifact. The JSON outcome
 distinguishes `published`, `preview`, `intake_only`, `skipped`, and `failed` and
-records the reviewed revision, readiness, rubric count, and verified comment URL.
+records the reviewed revision, readiness, rubric count, verified comment URL,
+and update-notification URL when applicable.
 
 ### Verify before merging
 

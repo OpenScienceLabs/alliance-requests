@@ -83,6 +83,9 @@ membership decisions to humans. See [bot setup](docs/bot-workflows.md#preliminar
 for the required `OPENAI_API_KEY` Actions secret and safe failure diagnostics.
 You can also run **Actions → Affiliation bot → Run workflow** with an existing
 application's issue number. Older `Incubation application:` issues are supported.
+Reviews show plain-language feedback and an action checklist, with detailed
+findings collapsed. Reevaluations update the original review and post a short
+reply linking to it.
 Use [read-only preview](docs/bot-workflows.md#verify-before-merging) on `main` to
 verify the real model request before publishing an evaluation.
 

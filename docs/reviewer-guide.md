@@ -16,6 +16,11 @@ skill's deeper investigation or a human decision. See
 You can also run **Actions → Affiliation bot → Run workflow** with the issue
 number. Legacy incubation applications are recognized automatically.
 
+The author-facing report summarizes strengths and priority concerns, with a
+follow-up checklist at the end. Expand **Detailed findings, evidence, and review
+scope** for the full rubric, evidence, and reviewer responsibilities. An updated
+evaluation also posts a short reply linking to the existing review comment.
+
 ## Review principles
 
 - Ask for links and evidence, not only claims.

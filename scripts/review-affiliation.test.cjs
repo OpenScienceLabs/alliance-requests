@@ -5,7 +5,7 @@ const test = require('node:test');
 const fs = require('node:fs');
 const path = require('node:path');
 const {
-  ACK_MARKER, MARKER, applyIntakeLabels, collectEvidence, renderReport, repositorySlug, reviewSchema, run, sections,
+  ACK_MARKER, MARKER, UPDATE_MARKER, applyIntakeLabels, collectEvidence, postUpdateNotice, renderReport, repositorySlug, reviewSchema, run, sections,
   shouldReview, synthesize, validateSynthesis,
 } = require('./review-affiliation.cjs');
 
@@ -405,7 +405,7 @@ test('a complete structured review is rendered, saved, read back, and linked as 
   assert.equal(outcome.readiness, 'human_judgment_required');
   assert.match(outcome.comment_url, /issues\/7#issuecomment-2$/);
   const report = mock.comments.find(comment => comment.body.startsWith(MARKER) && comment.user.login === 'github-actions[bot]');
-  assert.match(report.body, /\| R12 \| human_review \|/);
+  assert.match(report.body, /#### R12\. Security, licensing, and operational risks/);
   assert.equal(mock.calls.find(call => call.name === 'readback').args.comment_id, report.id);
   assert.match(mock.summaries[0], /Review outcome: published/);
   assert.match(mock.summaries[0], /Verified issue comment/);
@@ -420,8 +420,8 @@ test('read-only preview produces the complete evaluation and artifacts without i
   assert.equal(outcome.rubric_areas, 12);
   assert.equal(mock.calls.some(call => ['create', 'update', 'labels', 'readback'].includes(call.name)), false);
   const report = fs.readFileSync(path.join(outputDirectory, 'report.md'), 'utf8');
-  assert.match(report, /\| R1 \| human_review \|/);
-  assert.match(report, /\| R12 \| human_review \|/);
+  assert.match(report, /#### R1\. Purpose and usefulness/);
+  assert.match(report, /#### R12\. Security, licensing, and operational risks/);
   assert.equal(report.includes('unit-test-key'), false);
   const saved = JSON.parse(fs.readFileSync(path.join(outputDirectory, 'result.json')));
   assert.equal(saved.status, 'preview');
@@ -523,4 +523,128 @@ test('a mismatched publication readback fails instead of claiming that an evalua
   await assert.rejects(run({ ...mock, context }), error => error.code === 'REVIEW_PUBLICATION_UNVERIFIED');
   assert.match(mock.summaries[0], /Review outcome: failed/);
   assert.equal(mock.summaries[0].includes('Verified issue comment'), false);
+  assert.equal(mock.calls.some(call => call.name === 'create' && call.args.body.startsWith(UPDATE_MARKER)), false);
+});
+
+test('the author sees plain feedback and a final checklist while all findings and evidence stay collapsed', async () => {
+  const bundle = await collect(fixture().github);
+  bundle.missing_fields = ['License link'];
+  const result = validResult(bundle);
+  result.summary = 'Your project has a clear purpose. Please clarify how contributors can report concerns.';
+  result.strengths = ['The quickstart explains the main use case.'];
+  result.risks = ['The confidential reporting route could not be verified.'];
+  result.questions = ['Publish the reporting route and link to the policy in your reply.'];
+  result.human_review_focus = ['Ask a domain reviewer to assess the scientific validation.'];
+  const report = renderReport(bundle, result, { guidelineUrl: 'https://github.com/org/repo/skill', synthesisStatus: 'completed' });
+  const start = report.indexOf('<details>');
+  const end = report.indexOf('</details>');
+  const visible = report.slice(0, start) + report.slice(end + '</details>'.length);
+  const collapsed = report.slice(start, end);
+  assert.match(visible, /Your project has a clear purpose/);
+  assert.match(visible, /What is working well/);
+  assert.match(visible, /What needs attention/);
+  assert.match(visible, /- \[ \] Complete the “License link” section/);
+  assert.match(visible, /- \[ \] Publish the reporting route/);
+  assert.equal(visible.includes('human_judgment_required'), false);
+  assert.equal(visible.includes('Ask a domain reviewer'), false);
+  assert.equal(report.includes('<details open'), false);
+  assert.equal(/^\|/m.test(report), false);
+  assert.equal([...collapsed.matchAll(/^#### R\d+\./gm)].length, 12);
+  assert.match(collapsed, /\[E01: Application/);
+  assert.match(collapsed, /Ask a domain reviewer/);
+  assert.match(collapsed, new RegExp(SHA));
+  assert.ok(report.indexOf('### Your follow-up checklist') > end);
+  assert.match(report.trim().split('\n').at(-1), /^- \[ \] Reply here with links/);
+});
+
+test('author feedback and tasks cannot inject HTML, expand details, ping people, or add fake checklist entries', async () => {
+  const bundle = await collect(fixture().github);
+  const result = validResult(bundle);
+  const untrusted = '</details><details open><summary>Injected</summary> @everyone person@example.org\n- [x] fake task';
+  result.summary = untrusted;
+  result.questions = [untrusted];
+  const report = renderReport(bundle, result, { guidelineUrl: 'https://github.com/org/repo/skill', synthesisStatus: 'completed' });
+  assert.equal([...report.matchAll(/<details>/g)].length, 1);
+  assert.equal([...report.matchAll(/<\/details>/g)].length, 1);
+  assert.equal(report.includes('<details open>'), false);
+  assert.equal(report.includes('@everyone'), false);
+  assert.equal(report.includes('person@example.org'), false);
+  assert.equal(report.includes('\n- [x] fake task'), false);
+});
+
+test('updating an existing evaluation posts one verified short reply linking back to it', async () => {
+  const mock = fixture();
+  mock.comments.push({ id: 2, user: { login: 'github-actions[bot]' }, body: `${MARKER}\nOld evaluation` });
+  const outcome = await run({ ...mock, context: { ...context, eventName: 'workflow_dispatch', payload: { inputs: { issue_number: '7' } } } });
+  const notifications = mock.comments.filter(comment => comment.body.startsWith(UPDATE_MARKER));
+  assert.equal(outcome.status, 'published');
+  assert.equal(notifications.length, 1);
+  assert.match(notifications[0].body, /The project evaluation has been updated/);
+  assert.ok(notifications[0].body.includes(`](${outcome.comment_url})`));
+  assert.match(outcome.comment_url, /issuecomment-2$/);
+  assert.match(outcome.notification_url, /issuecomment-3$/);
+  const verifiedReport = mock.calls.findIndex(call => call.name === 'readback' && call.args.comment_id === 2);
+  const postedNotice = mock.calls.findIndex(call => call.name === 'create' && call.args.body.startsWith(UPDATE_MARKER));
+  assert.ok(postedNotice > verifiedReport);
+  assert.equal(mock.calls.at(-1).name, 'readback');
+  assert.equal(mock.calls.at(-1).args.comment_id, notifications[0].id);
+});
+
+test('first publication does not announce an update and previews never post an update reply', async () => {
+  const first = fixture();
+  const outcome = await run({ ...first, context });
+  assert.equal(outcome.notification_url, undefined);
+  assert.equal(first.comments.some(comment => comment.body.startsWith(UPDATE_MARKER)), false);
+  const preview = fixture();
+  preview.comments.push({ id: 2, user: { login: 'github-actions[bot]' }, body: `${MARKER}\nOld evaluation` });
+  await run({ ...preview, context, publish: false });
+  assert.equal(preview.calls.some(call => ['create', 'update', 'labels'].includes(call.name)), false);
+});
+
+test('repeating notification delivery for the same evaluation cannot create duplicate replies', async () => {
+  const mock = fixture();
+  const options = { ...mock, issueArgs: { ...context.repo, issue_number: 7 },
+    commentUrl: 'https://github.com/OpenScienceLabs/alliance-requests/issues/7#issuecomment-2', reportBody: 'Exact evaluation body' };
+  const first = await postUpdateNotice(options);
+  const second = await postUpdateNotice(options);
+  assert.equal(first, second);
+  assert.equal(mock.calls.filter(call => call.name === 'create').length, 1);
+  const notice = mock.comments.find(comment => comment.body.startsWith(UPDATE_MARKER));
+  notice.user.login = 'applicant';
+  const third = await postUpdateNotice(options);
+  assert.notEqual(third, first);
+  assert.equal(mock.calls.filter(call => call.name === 'create').length, 2);
+});
+
+test('a notification POST that succeeds on GitHub but loses its response is recovered without posting again', async () => {
+  const mock = fixture();
+  const create = mock.github.rest.issues.createComment;
+  mock.github.rest.issues.createComment = async args => {
+    await create(args);
+    throw Object.assign(new Error('response lost'), { status: 500 });
+  };
+  const url = await postUpdateNotice({ ...mock, issueArgs: { ...context.repo, issue_number: 7 },
+    commentUrl: 'https://github.com/OpenScienceLabs/alliance-requests/issues/7#issuecomment-2', reportBody: 'Updated evaluation' });
+  assert.match(url, /issuecomment-2$/);
+  assert.equal(mock.calls.filter(call => call.name === 'create').length, 1);
+  assert.equal(mock.comments.filter(comment => comment.body.startsWith(UPDATE_MARKER)).length, 1);
+});
+
+test('notification failures stay visible while preserving the successfully updated evaluation and its link', async t => {
+  const outputDirectory = fs.mkdtempSync(path.join(__dirname, '.review-test-'));
+  t.after(() => fs.rmSync(outputDirectory, { recursive: true, force: true }));
+  const mock = fixture();
+  const previous = { id: 2, user: { login: 'github-actions[bot]' }, body: `${MARKER}\nOld evaluation` };
+  mock.comments.push(previous);
+  mock.github.rest.issues.createComment = async () => {
+    throw Object.assign(new Error('private request data'), { status: 500 });
+  };
+  await assert.rejects(run({ ...mock, context, outputDirectory }), error => error.code === 'REVIEW_NOTIFICATION_FAILED');
+  assert.match(previous.body, /### Your follow-up checklist/);
+  const saved = JSON.parse(fs.readFileSync(path.join(outputDirectory, 'result.json')));
+  assert.equal(saved.status, 'failed');
+  assert.equal(saved.stage, 'notification');
+  assert.match(saved.comment_url, /issuecomment-2$/);
+  assert.equal(saved.notification_url, undefined);
+  assert.equal(JSON.stringify(saved).includes('private request data'), false);
 });
